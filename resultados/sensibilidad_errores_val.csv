@@ -1,0 +1,7 @@
+,,PR-AUC,ROC-AUC,recall con precisión ≥ 0.80
+completo (errores 24 h),Regresión logística,0.8535,0.9977,0.8179
+completo (errores 24 h),LightGBM,0.9999,1.0,1.0
+sin conteo de errores,Regresión logística,0.2824,0.9624,0.009
+sin conteo de errores,LightGBM,0.9231,0.9989,0.9853
+errores en ventana de 48 h,Regresión logística,0.5672,0.9903,0.0422
+errores en ventana de 48 h,LightGBM,0.9974,1.0,1.0

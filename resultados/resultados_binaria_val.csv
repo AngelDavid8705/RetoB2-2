@@ -1,0 +1,4 @@
+,PR-AUC,ROC-AUC,recall con precisión ≥ 0.80,umbral
+Regresión logística,0.8535,0.9977,0.8179,0.9666
+LightGBM,0.9999,1.0,1.0,0.0
+Azar (prevalencia),0.0184,0.5,0.0,
