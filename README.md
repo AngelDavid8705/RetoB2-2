@@ -5,13 +5,13 @@ Pipeline de datos, línea base (Entrega 1) y modelos secuenciales de deep learni
 ## Estructura
 
 ```
-archive/                        CSV originales (no se suben al repositorio)
+archive/                        CSV originales 
 src/pipeline_datos.py           pipeline que genera train y val desde los CSV
 src/modelos_dl.py               tensor de entrada, GRU, TCN, CNN-LSTM, entrenamiento y métricas
 Entrega1_RetoB2-2_AYJPS.ipynb   análisis exploratorio, etiquetas, fuga y línea base
 Entrega2_RetoB2-2_AYJPS.ipynb   modelos de deep learning y comparación con la línea base
 resultados/                     tablas y figuras de la entrega 1
-resultados_e2/                  tablas y figuras de la entrega 2
+resultados_e2/                  figuras de la entrega 2
 data/processed/                 train.parquet y val.parquet generados
 requirements.txt
 ```
@@ -21,10 +21,9 @@ requirements.txt
 1. Copiar los cinco CSV en la carpeta `archive`.
 2. Instalar dependencias con `pip install -r requirements.txt`.
 3. Generar los conjuntos con `python src/pipeline_datos.py archive`.
-4. Abrir el notebook en Colab, subir la carpeta `archive` al panel de archivos de la sesión y ejecutar todas las celdas. Para la entrega 2 se recomienda activar la GPU. Con `RAPIDO = True` el notebook corre una versión corta de prueba.
+4. Abrir el notebook en Colab, subir la carpeta `archive` al panel de archivos de la sesión y ejecutar todas las celdas.
 
-La semilla es 42. El conjunto de prueba (noviembre y diciembre de 2015) no se genera en esta entrega.
-
+La semilla es 42.
 ## Decisiones principales
 
 * Etiqueta binaria, falla de cualquier componente en (t, t + 24].
@@ -39,17 +38,17 @@ La línea base con LightGBM llega a PR-AUC de 1.000 en validación. No es fuga d
 * El sensor asociado a cada componente cambia unas 48 h antes de la falla.
 * El 96.6 % de las fallas tiene un error registrado exactamente 24 h antes.
 
-Como el conteo de errores que pide el punto 1.4 usa una ventana de 24 h, se enciende justo en las 24 horas positivas (el 100 % de las horas positivas tiene un error en esa ventana contra 8 % de las negativas). Junto con el salto del sensor marca exactamente la etiqueta, y LightGBM aprende esa combinación. Sin los conteos de error LightGBM baja a 0.923, y con ventana de 48 h queda en 0.997. Los detalles están al final de la sección 9 del notebook. En una planta real los errores de aviso no llegarían siempre con la misma anticipación, así que este resultado no sería alcanzable.
+Como el conteo de errores que pide el punto 1.4 usa una ventana de 24 h, se enciende justo en las 24 horas positivas (el 100 % de las horas positivas tiene un error en esa ventana contra 8 % de las negativas). Junto con el salto del sensor marca exactamente la etiqueta, y LightGBM aprende esa combinación. Sin los conteos de error LightGBM baja a 0.923, y con ventana de 48 h queda en 0.997. En una planta real los errores de aviso no llegarían siempre con la misma anticipación, así que este resultado no sería alcanzable.
 
 ## Entrega 2, modelos secuenciales
 
 * **Sin errores como entrada.** Por el patrón descrito arriba, las redes no usan los indicadores de error y la línea base de comparación es LightGBM sin conteos de error (PR-AUC 0.923). Un experimento aparte agrega los canales de error para mostrar su efecto.
 * **Tensor de entrada.** Ventana de L horas con los cuatro sensores y las horas desde el último reemplazo de cada componente (escala log), normalización global con estadísticas de entrenamiento, más embedding del modelo de máquina y antigüedad.
 * **Arquitecturas.** GRU, TCN y CNN-LSTM con salida binaria y multiclase y pérdida L_bin + λ · L_multi.
-* **Experimentos.** L de 24, 72 y 168 h, pérdida ponderada contra focal loss y submuestreo de horas sanas, y Optuna con 15 ensayos de 4 épocas.
-* **Resultado.** El mejor modelo (CNN-LSTM, L = 168, submuestreo, ajustado) llega a PR-AUC de 0.757 y F1 macro de 0.728 contra 0.923 y 0.856 de LightGBM, con 26.5 h de anticipación media contra 23.7 h. Con canales de error la misma red llega a 0.996.
+* **Experimentos.** L de 24, 72 y 168 h, pérdida ponderada contra focal loss y submuestreo de horas sanas, y Optuna con 15 ensayos de 4 épocas de 30 000 ventanas.
+* **Resultado.** La mejor red (TCN, L = 168, pérdida ponderada) llega a PR-AUC de 0.772 y F1 macro de 0.750 contra 0.923 y 0.856 de LightGBM, con 24.4 h de anticipación media contra 23.7 h. La búsqueda con Optuna no mejoró al modelo (0.733). Con canales de error la misma red llega a 0.997.
 
-Los experimentos completos tardan alrededor de una hora en CPU y bastante menos con GPU.
+Los resultados se obtuvieron en Colab con GPU, con 200 000 ventanas por época y hasta 30 épocas.
 
 ## Referencias
 
