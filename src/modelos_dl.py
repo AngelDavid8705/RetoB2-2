@@ -1,4 +1,4 @@
-"""Modelos secuenciales de deep learning del Reto B2-2 (Entrega 2).
+"""Modelos secuenciales de deep learning del Reto B2-2 (Entregas 2 y 3).
 
 Construye el tensor de entrada por ventanas, define las tres arquitecturas
 (GRU, TCN y CNN-LSTM) con dos salidas y contiene el entrenamiento y la evaluacion.
@@ -19,6 +19,7 @@ ERRORES = ["error1", "error2", "error3", "error4", "error5"]
 L_MAX = 168
 INICIO_TRAIN, FIN_TRAIN = pd.Timestamp("2015-01-01"), pd.Timestamp("2015-08-31")
 INICIO_VAL, FIN_VAL = pd.Timestamp("2015-09-01"), pd.Timestamp("2015-10-31")
+INICIO_TEST, FIN_TEST = pd.Timestamp("2015-11-01"), pd.Timestamp("2015-12-31")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -29,7 +30,7 @@ def fijar_semilla(seed=42):
         torch.cuda.manual_seed_all(seed)
 
 
-# ---------------------------------------------------------------- tensor de entrada
+# tensor de entrada
 
 def construir_tensor(tel, err, man, maq, etiquetas, con_errores=False):
     """Devuelve un diccionario con el tensor dinamico, los estaticos, las etiquetas y los indices.
@@ -87,6 +88,7 @@ def construir_tensor(tel, err, man, maq, etiquetas, con_errores=False):
             "y_bin": torch.tensor(y_bin), "y_multi": torch.tensor(y_multi), "canales": canales,
             "horas": horas, "maquinas": maquinas,
             "idx_train": indices(INICIO_TRAIN, FIN_TRAIN), "idx_val": indices(INICIO_VAL, FIN_VAL),
+            "idx_test": indices(INICIO_TEST, FIN_TEST),
             "media": media, "desv": desv}
 
 
@@ -100,7 +102,7 @@ def lote(D, idx, L):
             D["y_bin"][idx[:, 0], idx[:, 1]].to(DEVICE), D["y_multi"][idx[:, 0], idx[:, 1]].to(DEVICE))
 
 
-# ---------------------------------------------------------------- arquitecturas
+# arquitecturas
 
 class Cabezas(nn.Module):
     """Concatena el resumen de la secuencia con los estaticos y produce las dos salidas."""
@@ -175,7 +177,44 @@ class CNNLSTM(nn.Module):
         return self.cab(h[-1], modelo, edad)
 
 
+class TransformerNet(nn.Module):
+    """Codificador Transformer sobre parches de horas con un token de maquina al inicio.
+
+    Cada parche agrupa `parche` horas consecutivas y se proyecta a dimension d. Se suma una
+    codificacion posicional sinusoidal y se antepone un token de maquina construido con el
+    embedding del modelo y la antiguedad. La salida de ese token resume la ventana.
+    """
+    def __init__(self, c_in, L=168, d=64, cabezas=4, capas=2, parche=4, dropout=0.1):
+        super().__init__()
+        self.parche = parche
+        self.n_tok = -(-L // parche)
+        self.proy = nn.Linear(c_in * parche, d)
+        pos = torch.arange(self.n_tok)[:, None]
+        div = torch.exp(torch.arange(0, d, 2) * (-np.log(10000.0) / d))
+        pe = torch.zeros(self.n_tok, d)
+        pe[:, 0::2], pe[:, 1::2] = torch.sin(pos * div), torch.cos(pos * div)
+        self.register_buffer("pe", pe)
+        self.tok_modelo = nn.Embedding(4, d)
+        self.tok_edad = nn.Linear(1, d)
+        capa = nn.TransformerEncoderLayer(d, cabezas, 2 * d, dropout, batch_first=True, norm_first=True)
+        self.enc = nn.TransformerEncoder(capa, capas)
+        self.norm = nn.LayerNorm(d)
+        self.cab = Cabezas(d, dropout)
+
+    def forward(self, x, modelo, edad):
+        B, L, C = x.shape
+        resto = (-L) % self.parche
+        if resto:
+            x = torch.cat([x[:, :1].expand(B, resto, C), x], 1)
+        z = self.proy(x.reshape(B, -1, self.parche * C)) + self.pe
+        tok = (self.tok_modelo(modelo) + self.tok_edad(edad[:, None]))[:, None]
+        h = self.enc(torch.cat([tok, z], 1))
+        return self.cab(self.norm(h[:, 0]), modelo, edad)
+
+
 def crear_modelo(arq, c_in, L, hidden=64, dropout=0.2):
+    if arq == "Transformer":
+        return TransformerNet(c_in, L, hidden, 4, 2, 4, dropout)
     if arq == "GRU":
         return GRUNet(c_in, hidden, 1, dropout)
     if arq == "TCN":
@@ -185,7 +224,7 @@ def crear_modelo(arq, c_in, L, hidden=64, dropout=0.2):
     raise ValueError(arq)
 
 
-# ---------------------------------------------------------------- perdidas
+# perdidas
 
 def focal_bin(logit, y, gamma=2.0, alpha=0.75):
     p = torch.sigmoid(logit)
@@ -213,7 +252,7 @@ def perdida(logit_b, logits_m, yb, ym, estrategia, pesos, lam):
     return lb + lam * lm
 
 
-# ---------------------------------------------------------------- entrenamiento y evaluacion
+# entrenamiento y evaluacion
 
 @torch.no_grad()
 def predecir(modelo, D, idx, L, bs=2048):
@@ -350,3 +389,177 @@ def evaluar(D, idx, pb, pm, fallas, nombre=""):
     for c, v in zip(COMPONENTES, f1c):
         res[f"F1 {c}"] = v
     return res
+
+
+# calibracion e interpretabilidad
+
+def logit(p, eps=1e-6):
+    p = np.clip(p, eps, 1 - eps)
+    return np.log(p / (1 - p))
+
+
+def ajustar_temperatura(p, y):
+    """Busca la temperatura T que minimiza la log-loss de sigmoid(logit(p) / T) en validacion."""
+    z = torch.tensor(logit(p), dtype=torch.float64)
+    yt = torch.tensor(y, dtype=torch.float64)
+    logT = torch.zeros(1, dtype=torch.float64, requires_grad=True)
+    opt = torch.optim.LBFGS([logT], lr=0.1, max_iter=200)
+
+    def cierre():
+        opt.zero_grad()
+        loss = F.binary_cross_entropy_with_logits(z / logT.exp(), yt)
+        loss.backward()
+        return loss
+    opt.step(cierre)
+    return float(logT.exp())
+
+
+def aplicar_temperatura(p, T):
+    return 1 / (1 + np.exp(-logit(p) / T))
+
+
+def gradientes_integrados(modelo, D, idx, L, pasos=32, bs=64):
+    """Integrated gradients del logit binario respecto a la ventana de entrada.
+
+    La linea de referencia es una ventana de ceros, que equivale a la media de entrenamiento
+    porque los canales estan estandarizados. Devuelve un arreglo (n, L, C).
+    """
+    modelo.eval()
+    salida = []
+    alfas = torch.linspace(0, 1, pasos + 1, device=DEVICE)[1:]
+    for i in range(0, len(idx), bs):
+        x, mo, ed, _, _ = lote(D, idx[i:i + bs], L)
+        tot = torch.zeros_like(x)
+        for a in alfas:
+            xa = (a * x).detach().requires_grad_(True)
+            with torch.backends.cudnn.flags(enabled=False):
+                lb, _ = modelo(xa, mo, ed)
+            g, = torch.autograd.grad(lb.sum(), xa)
+            tot += g
+        salida.append((x * tot / pasos).detach().cpu())
+    return torch.cat(salida).numpy()
+
+
+# politicas de mantenimiento
+
+COSTOS = {"falla": 15000, "acierto": 3000, "falsa": 600}
+
+
+def eventos_falla(D, idx, fallas):
+    """Eventos de falla (maquina, hora) cuya ventana positiva cae dentro del periodo evaluado."""
+    en_periodo = np.zeros(D["y_bin"].shape, bool)
+    en_periodo[idx[:, 0], idx[:, 1]] = True
+    pos_hora = {h: i for i, h in enumerate(pd.to_datetime(D["horas"]))}
+    pos_maq = {m: i for i, m in enumerate(D["maquinas"])}
+    ev = []
+    for (m, f), g in fallas.groupby(["machineID", "datetime"]):
+        if f in pos_hora and pos_hora[f] > 0 and en_periodo[pos_maq[m], pos_hora[f] - 1]:
+            ev.append((pos_maq[m], pos_hora[f], tuple(sorted(g.failure))))
+    return ev
+
+
+def politica_modelo(D, idx, p, umbral, eventos, costos=COSTOS, sostenida=3, espera=24):
+    """Simula la politica de alertas del modelo en un periodo.
+
+    Se emite una alerta cuando la probabilidad supera el umbral 3 horas seguidas. Cada alerta
+    dispara una intervencion. Si hay una falla de la maquina en las 24 h siguientes la intervencion
+    es acertada y la falla se evita, si no es una falsa alarma. Despues de una alerta la maquina
+    no puede volver a alertar durante 24 h. Las fallas sin intervencion previa son no anticipadas.
+    """
+    serie = np.full(D["y_bin"].shape, np.nan, dtype=np.float32)
+    serie[idx[:, 0], idx[:, 1]] = p
+    fallas_maq = {}
+    for (im, i_f, comps) in eventos:
+        fallas_maq.setdefault(im, []).append(i_f)
+    aciertos, falsas, evitadas, antic, alertas = 0, 0, set(), [], []
+    for im in range(serie.shape[0]):
+        fila = serie[im]
+        validas = np.where(~np.isnan(fila))[0]
+        if len(validas) == 0:
+            continue
+        racha, libre = 0, -1
+        fm = np.array(sorted(fallas_maq.get(im, [])))
+        for t in validas:
+            racha = racha + 1 if fila[t] >= umbral else 0
+            if racha >= sostenida and t >= libre:
+                libre = t + espera
+                prox = fm[(fm > t) & (fm <= t + 24)] if len(fm) else []
+                alertas.append((im, int(t), bool(len(prox))))
+                if len(prox):
+                    aciertos += 1
+                    for f in prox:
+                        evitadas.add((im, int(f)))
+                    antic.append(prox[0] - t)
+                else:
+                    falsas += 1
+    n = len(eventos)
+    no_antic = sum(1 for (im, i_f, _) in eventos if (im, i_f) not in evitadas)
+    costo = no_antic * costos["falla"] + aciertos * costos["acierto"] + falsas * costos["falsa"]
+    return {"fallas": n, "evitadas": n - no_antic, "no anticipadas": no_antic, "aciertos": aciertos,
+            "falsas alarmas": falsas, "costo": costo, "anticipación media (h)": np.mean(antic) if antic else np.nan,
+            "alertas": alertas}
+
+
+def politica_hasta_falla(eventos, costos=COSTOS):
+    n = len(eventos)
+    return {"fallas": n, "evitadas": 0, "no anticipadas": n, "aciertos": 0, "falsas alarmas": 0,
+            "costo": n * costos["falla"], "anticipación media (h)": np.nan}
+
+
+def politica_calendario(D, idx, man, eventos, dias, costos=COSTOS):
+    """Reemplazo por calendario de cada componente cada `dias` dias desde su ultimo reemplazo.
+
+    El ultimo reemplazo se toma de los registros de mantenimiento anteriores al periodo y despues
+    se reinicia con cada reemplazo programado o correctivo. Un reemplazo programado evita una falla
+    del mismo componente si esta ocurre en las 24 h siguientes (se cobra como intervencion
+    acertada) y si no se cobra como intervencion sin falla.
+    """
+    horas = pd.to_datetime(D["horas"])
+    t_ini, t_fin = idx[:, 1].min(), idx[:, 1].max()
+    pos_maq = {m: i for i, m in enumerate(D["maquinas"])}
+    paso = int(dias * 24)
+    fallas_mc = {}
+    for (im, i_f, comps) in eventos:
+        for c in comps:
+            fallas_mc.setdefault((im, c), []).append(i_f)
+    aciertos, falsas, evitadas = 0, 0, set()
+    man = man[man.datetime < horas[t_ini]]
+    ult = man.groupby(["machineID", "comp"]).datetime.max()
+    pos_hora = pd.Series(np.arange(len(horas)), index=horas)
+    for m, im in pos_maq.items():
+        for c in COMPONENTES:
+            u = ult.get((m, c), horas[0])
+            last = int(np.searchsorted(horas.values, np.datetime64(u)))
+            fm = sorted(fallas_mc.get((im, c), []))
+            t = last + paso
+            while True:
+                # una falla anterior al siguiente reemplazo programado reinicia el reloj
+                previas = [f for f in fm if last < f <= t and (im, f, c) not in evitadas]
+                if previas:
+                    last = previas[0]
+                    t = last + paso
+                    continue
+                if t > t_fin:
+                    break
+                if t >= t_ini:
+                    prox = [f for f in fm if t < f <= t + 24]
+                    if prox:
+                        aciertos += 1
+                        for f in prox:
+                            evitadas.add((im, f, c))
+                    else:
+                        falsas += 1
+                last = t
+                t = last + paso
+    n = len(eventos)
+    no_antic = sum(1 for (im, i_f, comps) in eventos if not all((im, i_f, c) in evitadas for c in comps))
+    costo = no_antic * costos["falla"] + aciertos * costos["acierto"] + falsas * costos["falsa"]
+    return {"fallas": n, "evitadas": n - no_antic, "no anticipadas": no_antic, "aciertos": aciertos,
+            "falsas alarmas": falsas, "costo": costo, "anticipación media (h)": np.nan}
+
+
+def elegir_umbral(D, idx, p, eventos, costos=COSTOS, n=120):
+    """Umbral que minimiza el costo esperado de la politica del modelo en el periodo dado."""
+    cand = np.unique(np.quantile(p, np.linspace(0.90, 0.9995, n)))
+    res = [(u, politica_modelo(D, idx, p, u, eventos, costos)["costo"]) for u in cand]
+    return min(res, key=lambda r: r[1])[0], pd.DataFrame(res, columns=["umbral", "costo"])

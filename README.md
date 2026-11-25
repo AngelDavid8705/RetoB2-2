@@ -1,17 +1,19 @@
 # Reto B2-2 · Mantenimiento predictivo · Equipo AYJPS
 
-Pipeline de datos, línea base (Entrega 1) y modelos secuenciales de deep learning (Entrega 2) del proyecto de predicción de fallas con el conjunto Microsoft Azure Predictive Maintenance.
+Pipeline de datos, línea base (Entrega 1), modelos secuenciales de deep learning (Entrega 2) y modelo avanzado con política de mantenimiento (Entrega 3) del proyecto de predicción de fallas con el conjunto Microsoft Azure Predictive Maintenance.
 
 ## Estructura
 
 ```
 archive/                        CSV originales 
 src/pipeline_datos.py           pipeline que genera train y val desde los CSV
-src/modelos_dl.py               tensor de entrada, GRU, TCN, CNN-LSTM, entrenamiento y métricas
+src/modelos_dl.py               tensor de entrada, GRU, TCN, CNN-LSTM, Transformer, métricas, calibración y políticas
 Entrega1_RetoB2-2_AYJPS.ipynb   análisis exploratorio, etiquetas, fuga y línea base
 Entrega2_RetoB2-2_AYJPS.ipynb   modelos de deep learning y comparación con la línea base
+Entrega3_RetoB2-2_AYJPS.ipynb   Transformer, ensamble, calibración, interpretabilidad y política de mantenimiento
 resultados/                     tablas y figuras de la entrega 1
 resultados_e2/                  figuras de la entrega 2
+resultados_e3/                  figuras de la entrega 3
 data/processed/                 train.parquet y val.parquet generados
 requirements.txt
 ```
@@ -50,6 +52,17 @@ Como el conteo de errores que pide el punto 1.4 usa una ventana de 24 h, se enci
 
 Los resultados se obtuvieron en Colab con GPU, con 200 000 ventanas por época y hasta 30 épocas.
 
+## Entrega 3, modelo avanzado y política de mantenimiento
+
+* **Modelo avanzado.** Codificador Transformer (opción a) sobre parches de 4 horas con codificación posicional y un token de máquina, sin errores como entrada. Un modelo llega a PR-AUC de 0.680 y el ensamble de 5 semillas a 0.758 en validación.
+* **Incertidumbre y calibración.** Ensamble de 5 modelos y temperature scaling (T = 1.37). La discrepancia entre modelos es mucho mayor en las fallas no detectadas.
+* **Interpretabilidad.** Gradientes integrados por canal y hora. Cada componente se explica por su sensor (comp1 voltaje, comp2 rotación, comp3 presión, comp4 vibración) en las últimas 36 horas.
+* **Política.** El umbral y el modelo se eligen minimizando el costo en validación con los costos de la Tabla 3. Ganó LightGBM sin errores. En prueba, evaluada una sola vez, evita 109 de 110 fallas con 4.4 falsas alarmas por semana y 19.5 h de anticipación, con un costo anual estimado de 2.2 millones contra 10.0 millones de operar hasta la falla y 10.1 millones del reemplazo por calendario.
+* **Sensibilidad.** La política del modelo es la más barata para toda razón entre costo de falla y de falsa alarma de 10 a 100, y empata con operar hasta la falla cuando la falla cuesta lo mismo que una intervención.
+* **Pruebas de control.** Con las etiquetas de entrenamiento revueltas el PR-AUC de LightGBM en prueba cae a 0.025, igual al azar, lo que descarta una fuga de información. Los sensores solos llegan a 0.25 y las horas desde el reemplazo solas a 0.36, y juntos a 0.93.
+
+Los resultados de la entrega 3 se obtuvieron en CPU con 80 000 ventanas por época y hasta 20 épocas para cada Transformer. En GPU las cifras pueden variar ligeramente.
+
 ## Referencias
 
 * Microsoft. Predictive Maintenance Modelling Guide (Azure AI Gallery).
@@ -57,3 +70,7 @@ Los resultados se obtuvieron en Colab con GPU, con 200 000 ventanas por época y
 * Bai, S., Kolter, J. Z. y Koltun, V. (2018). An empirical evaluation of generic convolutional and recurrent networks for sequence modeling. arXiv 1803.01271.
 * Lin, T. Y. et al. (2017). Focal loss for dense object detection. ICCV.
 * Akiba, T. et al. (2019). Optuna, a next-generation hyperparameter optimization framework. KDD.
+* Vaswani, A. et al. (2017). Attention is all you need. NeurIPS.
+* Lakshminarayanan, B., Pritzel, A. y Blundell, C. (2017). Simple and scalable predictive uncertainty estimation using deep ensembles. NeurIPS.
+* Guo, C. et al. (2017). On calibration of modern neural networks. ICML.
+* Sundararajan, M., Taly, A. y Yan, Q. (2017). Axiomatic attribution for deep networks. ICML.

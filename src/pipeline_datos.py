@@ -20,7 +20,7 @@ CLASES = ["ninguno"] + COMPONENTES
 PERIODOS = {
     "train": ("2015-01-01 00:00", "2015-08-31 00:00"),
     "val": ("2015-09-01 00:00", "2015-10-31 00:00"),
-    # el conjunto de prueba (noviembre y diciembre de 2015) se construye hasta la semana 3
+    "test": ("2015-11-01 00:00", "2015-12-31 00:00"),  # solo se evalua una vez, en la semana 3
 }
 
 
