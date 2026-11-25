@@ -54,7 +54,7 @@ Los resultados se obtuvieron en Colab con GPU, con 200 000 ventanas por época y
 
 ## Entrega 3, modelo avanzado y política de mantenimiento
 
-* **Modelo avanzado.** Codificador Transformer (opción a) sobre parches de 4 horas con codificación posicional y un token de máquina, sin errores como entrada. Un modelo llega a PR-AUC de 0.680 y el ensamble de 5 semillas a 0.758 en validación.
+* **Modelo avanzado.** Codificador Transformer sobre parches de 4 horas con codificación posicional y un token de máquina, sin errores como entrada. Un modelo llega a PR-AUC de 0.680 y el ensamble de 5 semillas a 0.758 en validación.
 * **Incertidumbre y calibración.** Ensamble de 5 modelos y temperature scaling (T = 1.37). La discrepancia entre modelos es mucho mayor en las fallas no detectadas.
 * **Interpretabilidad.** Gradientes integrados por canal y hora. Cada componente se explica por su sensor (comp1 voltaje, comp2 rotación, comp3 presión, comp4 vibración) en las últimas 36 horas.
 * **Política.** El umbral y el modelo se eligen minimizando el costo en validación con los costos de la Tabla 3. Ganó LightGBM sin errores. En prueba, evaluada una sola vez, evita 109 de 110 fallas con 4.4 falsas alarmas por semana y 19.5 h de anticipación, con un costo anual estimado de 2.2 millones contra 10.0 millones de operar hasta la falla y 10.1 millones del reemplazo por calendario.
